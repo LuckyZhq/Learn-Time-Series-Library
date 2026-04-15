@@ -20,6 +20,8 @@ def RSE(pred: np.ndarray, true: np.ndarray) -> float:
         float
             相对平方误差，值越小通常表示预测效果越好
     """
+
+
     return np.sqrt(np.sum((true - pred) ** 2)) / np.sqrt(
         np.sum((true - true.mean()) ** 2)
     )
