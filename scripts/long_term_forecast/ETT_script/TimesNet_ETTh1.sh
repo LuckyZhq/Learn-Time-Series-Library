@@ -1,4 +1,5 @@
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
+export HF_ENDPOINT=https://hf-mirror.com
 
 model_name=TimesNet
 

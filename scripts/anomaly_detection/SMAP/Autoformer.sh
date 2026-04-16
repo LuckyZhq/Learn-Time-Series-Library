@@ -1,4 +1,5 @@
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=0
+export HF_ENDPOINT=https://hf-mirror.com
 
 python -u run.py \
   --task_name anomaly_detection \
