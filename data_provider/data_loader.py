@@ -848,3 +848,127 @@ class UEAloader(Dataset):
 
     def __len__(self):
         return len(self.all_IDs)
+
+
+class TEPLoader(Dataset):
+    """
+    Tennessee Eastman Process 数据集加载器
+    用于故障检测与诊断任务
+
+    数据集结构预期（可自动从 HuggingFace 下载）：
+    - TEP_te.dat        : 测试集（包含正常+故障工况）
+    - TEP_train.dat      : 训练集（正常工况）
+    - TEP_train_labels.dat : 训练集标签（可选）
+    - TEP_te_labels.dat  : 测试集标签
+    - TEP_varnames.dat   : 变量名称（可选）
+    - TEP_faultinfo.dat  : 故障信息（可选）
+
+    数据格式：
+    - 每行代表一个时间步的采样
+    - 包含 52 个变量（22 个过程变量 + 19 个成分变量 + 11 个操纵变量）
+
+    故障类型说明：
+    - IDV(0)  : 正常工况
+    - IDV(1)-IDV(21) : 21 种预定义故障
+    """
+
+    def __init__(self, args, root_path, flag='train', size=None,
+                 features='S', data_path='TEP_te.dat',
+                 scale=True, timeenc=0, freq='t',
+                 seasonal_patterns='Hourly',
+                 win_size=52, step=1):
+
+        # 记录关键参数
+        self.seq_len = size[0] if size is not None else 52
+        self.label_len = size[1] if size is not None else 0
+        self.pred_len = size[2] if size is not None else 0
+
+        self.features = features
+        self.target = args.target if hasattr(args, 'target') and args.target else 'OT'
+        self.scale = scale
+        self.timeenc = timeenc
+        self.freq = freq
+
+        self.root_path = root_path
+        self.data_path = data_path
+        self.flag = flag
+
+        self.win_size = win_size
+        self.step = step
+
+        self.__read_data__()
+
+    def __read_data__(self):
+        """读取 TEP 数据"""
+        import numpy as np
+        import pandas as pd
+        from pathlib import Path
+        from sklearn.preprocessing import StandardScaler
+
+        self.scaler = StandardScaler()
+        df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
+
+        '''
+        df_raw 示例：columns 为 ['col1', 'col2', ..., 'OT']
+        需要根据 flag 划分训练/验证/测试集
+        '''
+
+        # 边界划分：按行数比例
+        border1s = [
+            0,  # train start
+            int(len(df_raw) * 0.7) + self.seq_len,  # val start（前70%训练，留出seq_len个点做lookback）
+            int(len(df_raw) * 0.8) + self.seq_len  # test start（后20%测试）
+        ]
+        border2s = [
+            int(len(df_raw) * 0.7),  # train end
+            int(len(df_raw) * 0.8),  # val end
+            len(df_raw)  # test end
+        ]
+
+        border1 = border1s[self.set_type]
+        border2 = border2s[self.set_type]
+
+        # 读取原始数据（前 seq_len 行用于构造第一个样本的输入）
+        cols_data = df_raw.columns[:]
+        df_data = df_raw[cols_data]
+
+        # 标准化
+        if self.scale:
+            train_data = df_data[border1s[0]:border2s[0]]
+            self.scaler.fit(train_data.values)
+            data = self.scaler.transform(df_data.values)
+        else:
+            data = df_data.values
+
+        # 切分当前 flag 对应的数据段
+        self.data_x = data[border1:border2]
+        self.data_y = data[border1:border2]
+
+        # 时间特征（TEP 数据采样频率固定为 3分钟，可用时间索引）
+        df_stamp = df_raw[['date']] if 'date' in df_raw.columns else None
+
+        if df_stamp is not None and self.timeenc > 0:
+            df_stamp['date'] = pd.to_datetime(df_stamp.iloc[:, 0])
+            data_stamp = time_features(pd.DatetimeIndex(df_stamp['date']), freq=self.freq)
+            self.data_stamp = data_stamp.transpose(1, 0)[border1:border2]
+        else:
+            # 无时间特征时，生成递增时间索引
+            self.data_stamp = np.arange(len(self.data_x)).reshape(-1, 1)
+            self.data_stamp = self.data_stamp[border1:border2]
+
+    def __getitem__(self, index):
+        """获取一个样本"""
+        s_begin = index
+        s_end = s_begin + self.seq_len
+        r_begin = s_end - self.label_len
+        r_end = r_begin + self.label_len + self.pred_len if self.label_len > 0 else s_end + self.pred_len
+
+        seq_x = self.data_x[s_begin:s_end]
+        seq_y = self.data_y[r_begin:r_end]
+        seq_x_mark = self.data_stamp[s_begin:s_end]
+        seq_y_mark = self.data_stamp[r_begin:r_end]
+
+        return seq_x, seq_y, seq_x_mark, seq_y_mark
+
+    def __len__(self):
+        return len(self.data_x) - self.seq_len - self.pred_len + 1
