@@ -1,6 +1,6 @@
 # 导入各种数据集加载器
 from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_M4, PSMSegLoader, \
-    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader
+    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, TEPLoader, TEPAnomalyLoader
 # 导入UEA数据集的collate函数（用于处理变长序列）
 from data_provider.uea import collate_fn
 # 导入PyTorch数据加载器
@@ -21,7 +21,9 @@ data_dict = {
     'SMAP': SMAPSegLoader,          # SMAP异常检测数据集
     'SMD': SMDSegLoader,            # SMD异常检测数据集
     'SWAT': SWATSegLoader,          # SWAT异常检测数据集
-    'UEA': UEAloader                # UEA分类数据集
+    'UEA': UEAloader,                # UEA分类数据集
+    'TEP': TEPLoader,                 # 用于预测任务
+    'TEPAnomaly': TEPAnomalyLoader,  # 用于异常检测任务
 }
 
 
