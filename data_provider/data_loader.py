@@ -972,3 +972,88 @@ class TEPLoader(Dataset):
 
     def __len__(self):
         return len(self.data_x) - self.seq_len - self.pred_len + 1
+
+
+class TEPAnomalyLoader(Dataset):
+    """
+    TEP 数据集加载器（异常检测专用版本）
+
+    数据格式：
+    训练集：TEP_train.dat 或 TEP_train.npy  (正常工况)
+    测试集：TEP_te.dat 或 TEP_te.npy        (包含故障)
+    标签：  TEP_te_labels.dat 或 .npy        (0=正常, 1-21=故障类型)
+
+    支持从 HuggingFace 自动下载：
+    thuml/Time-Series-Library 的 datasets/TEP/train.npy
+    thuml/Time-Series-Library 的 datasets/TEP/test.npy
+    thuml/Time-Series-Library 的 datasets/TEP/test_label.npy
+    """
+
+    def __init__(self, root_path, win_size, step=1, flag='train'):
+        self.flag = flag
+        self.step = step
+        self.win_size = win_size
+
+        # 尝试从 HuggingFace 下载
+        try:
+            from huggingface_hub import hf_hub_download
+            repo_id = 'thuml/Time-Series-Library'
+
+            if flag == 'train':
+                local_path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename='datasets/TEP/train.npy',
+                    local_dir=root_path
+                )
+            else:
+                local_path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename='datasets/TEP/test.npy',
+                    local_dir=root_path
+                )
+                label_path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename='datasets/TEP/test_label.npy',
+                    local_dir=root_path
+                )
+        except:
+            # 本地文件 fallback
+            if flag == 'train':
+                local_path = os.path.join(root_path, 'train.npy')
+            else:
+                local_path = os.path.join(root_path, 'test.npy')
+                label_path = os.path.join(root_path, 'test_label.npy')
+
+        self.data = np.load(local_path)
+
+        # 划分训练/验证集
+        if flag == 'train':
+            # 前 80% 训练，后 20% 验证
+            self.data_len = len(self.data)
+            self.val_len = int(self.data_len * 0.2)
+            self.train_len = self.data_len - self.val_len
+
+            if flag == 'train':
+                self.data = self.data[:self.train_len]
+            else:
+                self.data = self.data[self.train_len:]
+        else:
+            self.labels = np.load(label_path)
+
+    def __getitem__(self, index):
+        i = index * self.step
+        data = self.data[i:i + self.win_size]
+
+        # 标签取窗口内所有标签值的众数
+        if self.flag == 'test':
+            label = mode(self.labels[i:i + self.win_size])[0][0]
+        else:
+            label = 0  # 训练集都是正常数据
+
+        return data, label
+
+    def __len__(self):
+        if self.flag == 'train':
+            return (len(self.data) - self.win_size) // self.step
+        else:
+            return (len(self.data) - self.win_size) // self.step
