@@ -8,14 +8,17 @@ from layers.Embed import DataEmbedding
 
 class Model(nn.Module):
     """
-    Informer with Propspare attention in O(LlogL) complexity
-    Paper link: https://ojs.aaai.org/index.php/AAAI/article/view/17325/17132
+    Informer 模型，采用 ProbSparse 注意力机制，时间复杂度为 O(LlogL)
+    论文链接：https://ojs.aaai.org/index.php/AAAI/article/view/17325/17132
     """
 
     def __init__(self, configs):
         super(Model, self).__init__()
+        # 任务类型：long_term_forecast / short_term_forecast / imputation / anomaly_detection / classification
         self.task_name = configs.task_name
+        # 预测序列长度，未来时间步数
         self.pred_len = configs.pred_len
+        # 标签序列长度，解码器起始输入长度
         self.label_len = configs.label_len
 
         # Embedding
@@ -75,73 +78,67 @@ class Model(nn.Module):
             self.projection = nn.Linear(configs.d_model * configs.seq_len, configs.num_class)
 
     def long_forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+        """长时序预测，不进行实例归一化"""
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
         dec_out = self.dec_embedding(x_dec, x_mark_dec)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
-
         dec_out = self.decoder(dec_out, enc_out, x_mask=None, cross_mask=None)
+        return dec_out
 
-        return dec_out  # [B, L, D]
-    
     def short_forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        # Normalization
-        mean_enc = x_enc.mean(1, keepdim=True).detach()  # B x 1 x E
+        """短时序预测，先做实例归一化再预测，最后反归一化"""
+        mean_enc = x_enc.mean(1, keepdim=True).detach()
         x_enc = x_enc - mean_enc
-        std_enc = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()  # B x 1 x E
+        std_enc = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
         x_enc = x_enc / std_enc
 
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
         dec_out = self.dec_embedding(x_dec, x_mark_dec)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
-
         dec_out = self.decoder(dec_out, enc_out, x_mask=None, cross_mask=None)
 
         dec_out = dec_out * std_enc + mean_enc
-        return dec_out  # [B, L, D]
+        return dec_out
 
     def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):
-        # enc
+        """缺失值填补，仅使用编码器后直接投影到输出"""
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
-        # final
         dec_out = self.projection(enc_out)
         return dec_out
 
     def anomaly_detection(self, x_enc):
-        # enc
+        """异常检测，仅使用编码器后直接投影到输出"""
         enc_out = self.enc_embedding(x_enc, None)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
-        # final
         dec_out = self.projection(enc_out)
         return dec_out
 
     def classification(self, x_enc, x_mark_enc):
-        # enc
+        """分类任务，编码器输出经激活和展平后做全连接分类"""
         enc_out = self.enc_embedding(x_enc, None)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
-
-        # Output
-        output = self.act(enc_out)  # the output transformer encoder/decoder embeddings don't include non-linearity
+        output = self.act(enc_out)
         output = self.dropout(output)
-        output = output * x_mark_enc.unsqueeze(-1)  # zero-out padding embeddings
-        output = output.reshape(output.shape[0], -1)  # (batch_size, seq_length * d_model)
-        output = self.projection(output)  # (batch_size, num_classes)
+        output = output * x_mark_enc.unsqueeze(-1)
+        output = output.reshape(output.shape[0], -1)
+        output = self.projection(output)
         return output
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if self.task_name == 'long_term_forecast':
             dec_out = self.long_forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-            return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+            return dec_out[:, -self.pred_len:, :]
         if self.task_name == 'short_term_forecast':
             dec_out = self.short_forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-            return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+            return dec_out[:, -self.pred_len:, :]
         if self.task_name == 'imputation':
             dec_out = self.imputation(x_enc, x_mark_enc, x_dec, x_mark_dec, mask)
-            return dec_out  # [B, L, D]
+            return dec_out
         if self.task_name == 'anomaly_detection':
             dec_out = self.anomaly_detection(x_enc)
-            return dec_out  # [B, L, D]
+            return dec_out
         if self.task_name == 'classification':
             dec_out = self.classification(x_enc, x_mark_enc)
-            return dec_out  # [B, N]
+            return dec_out
         return None
